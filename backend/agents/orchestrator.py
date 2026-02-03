@@ -1,99 +1,103 @@
-from agents.fraud_agent import check_fraud
-from agents.chat_agent import chat_assist
+# backend/agents/orchestrator.py
 
+from agents.pan_agent import handle_pan
+from agents.aadhaar_agent import handle_aadhaar, handle_otp
+from agents.fraud_agent import run_fraud_checks
+from agents.eligibility_engine import check_eligibility
+from agents.loan_options_agent import generate_loan_options
+from agents.sanction_letter_generator import generate_sanction_letter
 
-def handle_message(session, message: str):
+def handle_message(session, message):
     step = session.get("step", "START")
     profile = session["profile"]
     flags = session["flags"]
 
-    # STEP 1: Greeting (always first)
+    # 1️⃣ GREETING
     if step == "START":
-        session["step"] = "INCOME"
-        return "Welcome to SanctionX, your digital loan officer. Please enter your monthly income."
+        session["step"] = "NAME"
+        return "Welcome to SanctionX. Please enter your full name."
 
-    # STEP 2: Income
-    if step == "INCOME":
-        # basic numeric validation
-        try:
-            income = int(message)
-            if income <= 0:
-                return "Please enter a valid monthly income amount."
-        except:
-            return "Please enter your income as a number (e.g., 30000)."
+    if step == "NAME":
+        profile["name"] = message
+        session["step"] = "AGE"
+        return "Please enter your age."
 
-        profile["income"] = income
-        session["step"] = "LOAN_TYPE"
+    if step == "AGE":
+        profile["age"] = int(message)
+        session["step"] = "GENDER"
+        return "Please enter your gender (male/female)."
+
+    if step == "GENDER":
+        profile["gender"] = message.lower()
+        session["step"] = "LOAN"
         return "What type of loan do you want and for what purpose?"
 
-    # STEP 3: Loan type & purpose
-    if step == "LOAN_TYPE":
+    if step == "LOAN":
         profile["loan_type"] = message
         session["step"] = "EMPLOYMENT"
         return "Are you salaried or self-employed?"
 
-    # STEP 4: Employment type
     if step == "EMPLOYMENT":
         emp = message.lower()
-        if emp not in ["salaried", "self-employed", "self employed"]:
-            return "Please reply with either 'salaried' or 'self-employed'."
-
+        if emp not in ["salaried", "self-employed"]:
+            return "Currently, loans are only available for salaried or self-employed applicants."
         profile["employment"] = emp
+        session["step"] = "INCOME"
+        return "Please enter your monthly income."
+
+    if step == "INCOME":
+        profile["declared_income"] = int(message)
         session["step"] = "PAN"
-        return "Please enter your PAN number for verification."
+        return "Please enter your PAN number."
 
-    # STEP 5: PAN verification (handled via API in main.py)
     if step == "PAN":
-        # We only store PAN here, actual verification happens in /verify-pan
-        profile["pan"] = message.upper()
-        session["step"] = "DOCUMENT"
-        return "Thank you. PAN verified. Please upload your income proof document or allow DigiLocker access."
+        return handle_pan(session, message)
 
-    # STEP 6: Document upload
     if step == "DOCUMENT":
-        # User should upload file, not type
-        return "Please upload your income proof document using the upload button."
-
-    # STEP 7: Credit check (simulated for now)
-    if step == "CREDIT":
-        profile["credit_score"] = 720  # simulated
         session["step"] = "FRAUD"
-        return "Credit profile checked. Performing fraud risk assessment."
+        return "Income document received. Running fraud checks."
 
-    # STEP 8: Fraud check
     if step == "FRAUD":
-        if flags.get("fraud_risk"):
+        fraud = run_fraud_checks(profile, flags)
+        if fraud:
             session["step"] = "END"
-            return "⚠️ Application flagged as high risk."
+            return "⚠ Your application is flagged as suspicious and cannot be processed."
 
         session["step"] = "AADHAAR"
-        return "Fraud checks passed. Please enter your Aadhaar number for eKYC verification."
+        return "Fraud checks passed. Please enter your Aadhaar number."
 
     if step == "AADHAAR":
-        return "An OTP has been sent to your Aadhaar-linked mobile number. Please enter the OTP."
+        return handle_aadhaar(session, message)
 
-    if step == "AADHAAR_OTP":
-        return "Verifying OTP. Please wait..."
+    if step == "OTP":
+        return handle_otp(session, message)
 
+    if step == "ELIGIBLE":
+        result = check_eligibility(profile, flags)
+        if not result["eligible"]:
+            return "❌ You are not eligible due to:\n" + "\n".join(result["reasons"])
 
-    # STEP 10: Final eligibility
-    if step == "ELIGIBILITY":
-        income = profile.get("income", 0)
-        credit = profile.get("credit_score", 0)
+        options = generate_loan_options(profile)
+        session["profile"]["options"] = options
+        session["step"] = "CHOOSE"
 
-        if income >= 25000 and credit >= 700 and flags.get("pan_verified") and flags.get("kyc_verified"):
-            session["step"] = "END"
-            return "✅ You are eligible for a loan. Would you like to proceed with approval?"
-        else:
-            session["step"] = "END"
-            return "❌ Unfortunately, you do not meet the eligibility criteria at this time."
-    
-        # If message is not part of flow → use OpenRouter for help
-    if step not in ["START","INCOME","LOAN_TYPE","EMPLOYMENT","PAN","DOCUMENT","CREDIT","FRAUD","KYC","ELIGIBILITY"]:
-        return chat_assist(message)
-    # STEP 11: End
-    if step == "END":
-        return "Thank you for using SanctionX."
+        msg = "✅ You are eligible. Available loan options:\n"
+        for i, opt in enumerate(options, 1):
+            msg += f"\nOption {i}: ₹{opt['amount']} | {opt['months']} months | {opt['rate']}% | EMI ₹{opt['emi']}"
+        msg += "\n\nPlease choose Option 1, 2, or 3."
+
+        return msg
+
+    if step == "CHOOSE":
+        choice = int(message.strip()[-1]) - 1
+        chosen = profile["options"][choice]
+        profile["final_offer"] = chosen
+        session["step"] = "SANCTION"
+        return f"Loan approved for ₹{chosen['amount']} at {chosen['rate']}%. Generating sanction letter."
+
+    if step == "SANCTION":
+        path = generate_sanction_letter(profile)
+        session["profile"]["sanction_path"] = path
+        return f"🎉 Loan approved.\nYour sanction letter is ready.\nPlease download it.\nPlease visit your closest bank branch for disbursement of the loan amount."
+
     return "Thank you for using SanctionX."
-  
-

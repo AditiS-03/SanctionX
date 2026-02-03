@@ -7,43 +7,11 @@ export default function ChatWidget() {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
   const [expectingFile, setExpectingFile] = useState(false);
-  const [showCamera, setShowCamera] = useState(false);
   const fileInputRef = useRef(null);
-  const videoRef = useRef(null);
 
   useEffect(() => {
     startConversation();
   }, []);
-
-  const addBotMessage = (text) => {
-    setMessages((prev) => [...prev, { role: "bot", text }]);
-    handleSpecialUI(text);
-  };
-
-  const handleSpecialUI = (reply) => {
-    const t = reply.toLowerCase();
-    setExpectingFile(t.includes("upload"));
-    setShowCamera(t.includes("camera") || t.includes("kyc"));
-    if (t.includes("otp")) {
-      setExpectingFile(false);
-    }
-
-
-  };
-
-  const sendAadhaar = async (aadhaar) => {
-    await fetch(`${BACKEND_URL}/aadhaar-generate-otp?session_id=${SESSION_ID}&aadhaar=${aadhaar}`, {
-      method: "POST"
-    });
-  };
-
-  const sendOtp = async (otp) => {
-    await fetch(`${BACKEND_URL}/aadhaar-verify-otp?session_id=${SESSION_ID}&otp=${otp}`, {
-      method: "POST"
-    });
-  };
-
-
 
   const startConversation = async () => {
     const res = await fetch(`${BACKEND_URL}/chat`, {
@@ -60,13 +28,16 @@ export default function ChatWidget() {
     handleSpecialUI(data.reply);
   };
 
-  const sendMessage = async () => {
-    if (messages[messages.length - 1]?.text.includes("Aadhaar")) {
-      sendAadhaar(input);
-    } else if (messages[messages.length - 1]?.text.includes("OTP")) {
-      sendOtp(input);
+  const handleSpecialUI = (reply) => {
+    const text = reply.toLowerCase();
+    if (text.includes("upload")) {
+      setExpectingFile(true);
+    } else {
+      setExpectingFile(false);
     }
+  };
 
+  const sendMessage = async () => {
     if (!input.trim()) return;
 
     setMessages((prev) => [...prev, { role: "user", text: input }]);
@@ -81,7 +52,8 @@ export default function ChatWidget() {
     });
 
     const data = await res.json();
-    addBotMessage(data.reply);
+    setMessages((prev) => [...prev, { role: "bot", text: data.reply }]);
+    handleSpecialUI(data.reply);
     setInput("");
   };
 
@@ -94,43 +66,28 @@ export default function ChatWidget() {
     const formData = new FormData();
     formData.append("file", file);
 
-    const res = await fetch(`${BACKEND_URL}/upload-doc?session_id=${SESSION_ID}`, {
-      method: "POST",
-      body: formData,
-    });
+    const res = await fetch(
+      `${BACKEND_URL}/upload-doc?session_id=${SESSION_ID}`,
+      {
+        method: "POST",
+        body: formData,
+      }
+    );
 
     const data = await res.json();
 
     if (data.valid) {
-      addBotMessage("✅ Document verified. Income: ₹" + data.income);
+      setMessages((prev) => [
+        ...prev,
+        { role: "bot", text: "✅ Document verified. Income: ₹" + data.income },
+      ]);
+      setExpectingFile(false);
     } else {
-      addBotMessage("❌ Document rejected: " + data.reason);
+      setMessages((prev) => [
+        ...prev,
+        { role: "bot", text: "❌ Document rejected: " + data.reason },
+      ]);
     }
-  };
-
-  const startCamera = async () => {
-    const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-    videoRef.current.srcObject = stream;
-  };
-
-  const capturePhoto = async () => {
-    const video = videoRef.current;
-    const canvas = document.createElement("canvas");
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
-    canvas.getContext("2d").drawImage(video, 0, 0);
-
-    const blob = await new Promise((res) => canvas.toBlob(res, "image/png"));
-    const formData = new FormData();
-    formData.append("file", blob);
-
-    await fetch(`${BACKEND_URL}/kyc-photo?session_id=${SESSION_ID}`, {
-      method: "POST",
-      body: formData,
-    });
-
-    addBotMessage("✅ KYC completed successfully.");
-    setShowCamera(false);
   };
 
   const resetChat = async () => {
@@ -138,7 +95,6 @@ export default function ChatWidget() {
     setMessages([]);
     setInput("");
     setExpectingFile(false);
-    setShowCamera(false);
     startConversation();
   };
 
@@ -150,7 +106,6 @@ export default function ChatWidget() {
           <div style={styles.title}>SanctionX</div>
           <div style={styles.status}>● Online</div>
         </div>
-
         <button onClick={resetChat} style={styles.resetBtn}>↻</button>
       </div>
 
@@ -170,21 +125,32 @@ export default function ChatWidget() {
               }}
             >
               {m.text}
+
+              {/* ✅ DOWNLOAD BUTTON */}
+              {m.text.toLowerCase().includes("sanction") && (
+                <div style={{ marginTop: "8px" }}>
+                  <a
+                    href={`${BACKEND_URL}/download-sanction?session_id=${SESSION_ID}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    style={{
+                      display: "inline-block",
+                      padding: "6px 10px",
+                      backgroundColor: "#1B5E20",
+                      color: "white",
+                      borderRadius: "6px",
+                      textDecoration: "none",
+                      fontSize: "13px",
+                    }}
+                  >
+                    ⬇ Download Sanction Letter
+                  </a>
+                </div>
+              )}
             </div>
           </div>
         ))}
       </div>
-
-      {showCamera && (
-        <div style={styles.cameraBox}>
-          <div>Please wave hi for KYC verification</div>
-          <video ref={videoRef} autoPlay width="200" />
-          <div>
-            <button onClick={startCamera}>Start Camera</button>
-            <button onClick={capturePhoto}>Capture</button>
-          </div>
-        </div>
-      )}
 
       <div style={styles.inputArea}>
         {expectingFile && (
@@ -219,44 +185,43 @@ export default function ChatWidget() {
   );
 }
 
+/* ---------------- STYLES ---------------- */
+
 const styles = {
   chatCard: {
-    width: "360px",
-    height: "560px",
-    borderRadius: "22px",
-    overflow: "hidden",
-    backgroundColor: "#F2F2F2",
-    display: "flex",
     margin: "50px auto",
+    width: "360px",
+    height: "520px",
+    borderRadius: "15px",
+    overflow: "hidden",
+    border: "1px solid #E0E0E0",
+    backgroundColor: "#F4F7F9",
+    display: "flex",
     flexDirection: "column",
     fontFamily: "Segoe UI, sans-serif",
-    boxShadow: "0 10px 25px rgba(0,0,0,0.15)",
   },
-
   header: {
-    backgroundColor: "#2FA36B",
+    backgroundColor: "#1B5E20",
     color: "white",
-    padding: "14px",
+    padding: "10px",
     display: "flex",
     alignItems: "center",
     gap: "10px",
     position: "relative",
   },
-
   resetBtn: {
     position: "absolute",
-    right: "12px",
-    top: "12px",
+    right: "10px",
+    top: "8px",
     background: "none",
     border: "none",
     color: "white",
     fontSize: "18px",
     cursor: "pointer",
   },
-
   avatar: {
-    backgroundColor: "rgba(255,255,255,0.2)",
-    color: "white",
+    backgroundColor: "white",
+    color: "#1B5E20",
     width: "36px",
     height: "36px",
     borderRadius: "50%",
@@ -265,82 +230,50 @@ const styles = {
     alignItems: "center",
     fontWeight: "bold",
   },
-
-  title: {
-    fontWeight: "600",
-    fontSize: "16px",
-  },
-
-  status: {
-    fontSize: "12px",
-    color: "#DFF5EA",
-  },
-
-  chatArea: {
-    flex: 1,
-    padding: "14px",
-    overflowY: "auto",
-    backgroundColor: "#F2F2F2",
-  },
-
-  messageRow: {
-    display: "flex",
-    marginBottom: "10px",
-  },
-
+  title: { fontWeight: "bold" },
+  status: { fontSize: "12px", color: "#C8E6C9" },
+  chatArea: { flex: 1, padding: "10px", overflowY: "auto" },
+  messageRow: { display: "flex", marginBottom: "8px" },
   bubble: {
-    padding: "12px 14px",
-    borderRadius: "16px",
+    padding: "8px 12px",
+    borderRadius: "10px",
     maxWidth: "75%",
+    color: "#263238",
     fontSize: "14px",
-    lineHeight: "1.4",
-    backgroundColor: "white",
-    boxShadow: "0 2px 5px rgba(0,0,0,0.08)",
   },
-
-  cameraBox: {
-    padding: "10px",
-    backgroundColor: "#E6F4EC",
-    textAlign: "center",
-  },
-
   inputArea: {
     display: "flex",
-    padding: "10px",
-    backgroundColor: "#F2F2F2",
+    padding: "8px",
+    borderTop: "1px solid #E0E0E0",
+    backgroundColor: "white",
     alignItems: "center",
-    gap: "6px",
   },
-
   uploadBtn: {
+    marginRight: "6px",
     backgroundColor: "#E0E0E0",
     border: "none",
     borderRadius: "50%",
-    width: "34px",
-    height: "34px",
+    width: "30px",
+    height: "30px",
     fontSize: "20px",
     cursor: "pointer",
   },
-
   input: {
     flex: 1,
     border: "none",
     outline: "none",
-    padding: "10px 14px",
+    padding: "8px",
     borderRadius: "20px",
-    backgroundColor: "white",
-    fontSize: "14px",
-    boxShadow: "0 1px 3px rgba(0,0,0,0.1)",
+    backgroundColor: "#F4F7F9",
   },
-
   sendBtn: {
-    backgroundColor: "#2FA36B",
+    marginLeft: "6px",
+    backgroundColor: "#1B5E20",
     color: "white",
     border: "none",
     borderRadius: "50%",
-    width: "38px",
-    height: "38px",
+    width: "36px",
+    height: "36px",
     cursor: "pointer",
-    fontSize: "16px",
   },
 };
